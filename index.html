@@ -1,0 +1,574 @@
+<!DOCTYPE html>
+<html lang="th">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>AR Space Collector — Web Hardware API Demo</title>
+<style>
+  /* ========================================================================
+     TOKEN SYSTEM
+     ธีม: อวกาศลึกยามค่ำคืน — ไม่ใช้โทนครีม/terracotta แบบ default
+     พื้นหลัง: navy เข้มเกือบดำ, accent หลัก: cyan (สัญญาณเซนเซอร์),
+     accent รอง: violet (ยานอวกาศ/ดาว)
+  ========================================================================= */
+  :root{
+    --bg-deep:    #05070f;
+    --bg-panel:   #0d1224;
+    --line:       #1f2b4d;
+    --ink:        #e8ecff;
+    --ink-dim:    #8a93bd;
+    --cyan:       #5be3d8;
+    --violet:     #9d7bff;
+    --amber:      #ffb454;
+    --danger:     #ff6b7a;
+  }
+
+  *{box-sizing:border-box;}
+  html,body{
+    margin:0; padding:0; height:100%;
+    background:var(--bg-deep);
+    color:var(--ink);
+    font-family:'Segoe UI', system-ui, -apple-system, sans-serif;
+    overflow:hidden;
+    -webkit-tap-highlight-color: transparent;
+  }
+
+  #stage{
+    position:relative;
+    width:100vw; height:100vh;
+    overflow:hidden;
+  }
+
+  /* วิดีโอจากกล้อง ใช้เป็นพื้นหลังของเกม */
+  #camFeed{
+    position:absolute; inset:0;
+    width:100%; height:100%;
+    object-fit:cover;
+    filter: brightness(0.55) saturate(1.1);
+    background:#000;
+  }
+
+  /* Canvas วาดยานอวกาศ + ดาว วางทับบนวิดีโอ */
+  #gameCanvas{
+    position:absolute; inset:0;
+    width:100%; height:100%;
+    z-index:2;
+  }
+
+  /* ---------- Header / Score ---------- */
+  #hud-top{
+    position:absolute; top:0; left:0; right:0;
+    display:flex; justify-content:space-between; align-items:flex-start;
+    padding:16px 18px;
+    z-index:5;
+    pointer-events:none;
+  }
+  .title-block{
+    font-family: 'Courier New', monospace;
+    letter-spacing: 0.5px;
+  }
+  .title-block h1{
+    margin:0; font-size:15px; font-weight:700; color:var(--ink);
+  }
+  .title-block p{
+    margin:2px 0 0; font-size:11px; color:var(--ink-dim);
+  }
+  #scoreBox{
+    background:rgba(13,18,36,0.75);
+    border:1px solid var(--line);
+    border-radius:10px;
+    padding:8px 16px;
+    text-align:center;
+    backdrop-filter: blur(4px);
+  }
+  #scoreBox .n{
+    font-size:24px; font-weight:800; color:var(--cyan);
+    line-height:1;
+    font-variant-numeric: tabular-nums;
+  }
+  #scoreBox .l{
+    font-size:10px; color:var(--ink-dim); margin-top:2px;
+  }
+
+  /* ---------- Debug / Status Console มุมล่างซ้าย ---------- */
+  #debugPanel{
+    position:absolute; left:14px; bottom:14px;
+    width:230px;
+    background:rgba(5,7,15,0.82);
+    border:1px solid var(--line);
+    border-radius:10px;
+    padding:10px 12px;
+    font-family:'Courier New', monospace;
+    font-size:11px;
+    color:var(--ink-dim);
+    z-index:5;
+    backdrop-filter: blur(4px);
+    line-height:1.7;
+  }
+  #debugPanel .dp-head{
+    color:var(--cyan);
+    font-weight:700;
+    margin-bottom:6px;
+    display:flex; align-items:center; gap:6px;
+  }
+  #debugPanel .dp-head .dot{
+    width:7px; height:7px; border-radius:50%;
+    background:var(--danger);
+    display:inline-block;
+  }
+  #debugPanel .dp-head .dot.on{ background:var(--cyan); box-shadow:0 0 6px var(--cyan); }
+  .dp-row{ display:flex; justify-content:space-between; }
+  .dp-row span:last-child{ color:var(--ink); }
+  .dp-row .warn{ color:var(--amber); }
+  .dp-row .ok{ color:var(--cyan); }
+  .dp-row .bad{ color:var(--danger); }
+
+  /* ---------- ปุ่มขอ Permission (iOS ต้องกดปุ่ม) ---------- */
+  #permOverlay{
+    position:absolute; inset:0;
+    z-index:20;
+    background:rgba(5,7,15,0.94);
+    display:flex; align-items:center; justify-content:center;
+    flex-direction:column;
+    text-align:center;
+    padding:24px;
+  }
+  #permOverlay h2{
+    font-size:19px; margin:0 0 8px; color:var(--ink);
+  }
+  #permOverlay p{
+    font-size:13px; color:var(--ink-dim); max-width:320px; margin:0 0 22px;
+    line-height:1.6;
+  }
+  #permOverlay button{
+    background:var(--violet);
+    color:#0a0a14;
+    border:none;
+    padding:13px 28px;
+    border-radius:9px;
+    font-size:14px;
+    font-weight:700;
+    cursor:pointer;
+  }
+  #permOverlay button:active{ transform: scale(0.97); }
+  #permOverlay .skip{
+    margin-top:12px;
+    background:none;
+    color:var(--ink-dim);
+    text-decoration:underline;
+    padding:6px;
+    font-weight:400;
+    font-size:12px;
+  }
+
+  /* ---------- แจ้งเตือน fallback ---------- */
+  #fallbackNotice{
+    position:absolute; top:66px; left:50%; transform:translateX(-50%);
+    background:rgba(255,180,84,0.15);
+    border:1px solid var(--amber);
+    color:var(--amber);
+    font-size:11px;
+    padding:6px 12px;
+    border-radius:20px;
+    z-index:6;
+    display:none;
+    font-family:'Courier New', monospace;
+  }
+
+  #hintFooter{
+    position:absolute; bottom:14px; right:14px;
+    font-size:11px; color:var(--ink-dim);
+    z-index:5;
+    text-align:right;
+    max-width:150px;
+    font-family:'Courier New', monospace;
+  }
+
+  @media (max-width: 480px){
+    #debugPanel{ width: 190px; font-size:10px; }
+    #hintFooter{ max-width:110px; font-size:10px; }
+  }
+</style>
+</head>
+<body>
+
+<div id="stage">
+  <!-- (1) วิดีโอสดจากกล้อง: ใช้เป็นพื้นหลัง AR -->
+  <video id="camFeed" autoplay playsinline muted></video>
+
+  <!-- (2) Canvas สำหรับวาดยานอวกาศและดาว -->
+  <canvas id="gameCanvas"></canvas>
+
+  <div id="hud-top">
+    <div class="title-block">
+      <h1>AR SPACE COLLECTOR</h1>
+      <p>Camera × Gyroscope Web API Demo</p>
+    </div>
+    <div id="scoreBox">
+      <div class="n" id="scoreVal">0</div>
+      <div class="l">STARS</div>
+    </div>
+  </div>
+
+  <div id="fallbackNotice">⚠ ไม่พบ Gyroscope — สลับไปใช้เมาส์/ปุ่มลูกศรแทน</div>
+
+  <!-- (3) แผง Debug/Status Console แสดงค่าจากฮาร์ดแวร์แบบ Real-time -->
+  <div id="debugPanel">
+    <div class="dp-head"><span class="dot" id="dotCam"></span>SENSOR CONSOLE</div>
+    <div class="dp-row"><span>Camera</span><span id="dbgCam">inactive</span></div>
+    <div class="dp-row"><span>Gyro Mode</span><span id="dbgGyroMode">detecting...</span></div>
+    <div class="dp-row"><span>Beta (front/back)</span><span id="dbgBeta">0.0°</span></div>
+    <div class="dp-row"><span>Gamma (left/right)</span><span id="dbgGamma">0.0°</span></div>
+    <div class="dp-row"><span>Ship X,Y</span><span id="dbgPos">-, -</span></div>
+    <div class="dp-row"><span>FPS</span><span id="dbgFps">0</span></div>
+  </div>
+
+  <div id="hintFooter">เอียงเครื่อง หรือขยับเมาส์<br>เพื่อบังคับยานเก็บดาว</div>
+
+  <!-- Overlay สำหรับขอ permission กล้อง + gyroscope (จำเป็นสำหรับ iOS 13+) -->
+  <div id="permOverlay">
+    <h2>🚀 พร้อมเริ่มภารกิจหรือยัง?</h2>
+    <p>
+      เกมนี้ต้องขอสิทธิ์เข้าถึง <strong>กล้อง</strong> และ <strong>เซนเซอร์การเอียงเครื่อง (Gyroscope)</strong>
+      เพื่อสาธิตการเชื่อมต่อ Web App กับ Hardware ของอุปกรณ์คุณ
+    </p>
+    <button id="startBtn">เริ่มภารกิจ / START</button>
+    <button class="skip" id="skipBtn">ข้าม (ทดสอบด้วยเมาส์แทน)</button>
+  </div>
+</div>
+
+<script>
+/* ==========================================================================
+   AR SPACE COLLECTOR — main.js (inline)
+   โครงสร้างสคริปต์แบ่งเป็น 4 ส่วนหลัก:
+     A) Camera Layer      -> navigator.mediaDevices.getUserMedia (Data Stream)
+     B) Gyroscope Layer   -> DeviceOrientationEvent (Event Listener)
+     C) Fallback Layer    -> Mouse / Arrow keys
+     D) Game Loop         -> requestAnimationFrame @ 60fps
+   ========================================================================== */
+
+// ---------- ตัวแปรสถานะรวมของเกม ----------
+const state = {
+  camActive: false,
+  gyroActive: false,
+  inputMode: 'none',      // 'gyro' | 'mouse' | 'keyboard'
+  beta: 0,                // เอียงหน้า-หลัง (-180 ถึง 180)
+  gamma: 0,               // เอียงซ้าย-ขวา (-90 ถึง 90)
+  shipX: 0, shipY: 0,     // ตำแหน่งยานบน canvas (px)
+  score: 0,
+  star: { x: 0, y: 0, r: 18 },
+  keys: { left:false, right:false, up:false, down:false },
+  lastFrameTime: performance.now(),
+  fpsSmooth: 0
+};
+
+const video   = document.getElementById('camFeed');
+const canvas  = document.getElementById('gameCanvas');
+const ctx     = canvas.getContext('2d');
+
+/* ------------------------------------------------------------------------
+   A) CAMERA INTEGRATION — Data Stream
+   getUserMedia คืนค่าเป็น "MediaStream" ซึ่งเป็นข้อมูลที่ไหลเข้ามาต่อเนื่อง
+   (สตรีมภาพ) ตราบใดที่ track ยัง active — ต่างจาก event ที่ยิงเป็นครั้งๆ
+   ------------------------------------------------------------------------ */
+async function startCamera(){
+  try{
+    // ขอสิทธิ์กล้อง โดยพยายามเลือกกล้องหลัง (environment) ก่อน
+    const stream = await navigator.mediaDevices.getUserMedia({
+      video: { facingMode: { ideal: 'environment' } },
+      audio: false
+    });
+    video.srcObject = stream;  // ผูก MediaStream เข้ากับ <video> โดยตรง
+    await video.play();
+
+    state.camActive = true;
+    updateDebug('cam', true);
+  }catch(err){
+    // กรณีผู้ใช้ปฏิเสธสิทธิ์ หรืออุปกรณ์ไม่มีกล้อง
+    console.warn('Camera error:', err);
+    state.camActive = false;
+    updateDebug('cam', false);
+    document.getElementById('dbgCam').textContent = 'denied/unavailable';
+  }
+}
+
+/* ------------------------------------------------------------------------
+   B) GYROSCOPE INTEGRATION — Event Listener
+   ต่างจากกล้อง: DeviceOrientationEvent ไม่ใช่สตรีมที่เราต้อง "เปิด" เอง
+   แต่เบราว์เซอร์จะ "ยิง event" มาให้ทุกครั้งที่ค่าการเอียงเปลี่ยน
+   เราแค่ addEventListener แล้วรอรับค่า beta / gamma ในแต่ละ event object
+   ------------------------------------------------------------------------ */
+function handleOrientation(e){
+  // event.beta  : เอียงหน้า-หลัง (พลิกจอขึ้น/ลง)   ช่วงประมาณ -180 ถึง 180
+  // event.gamma : เอียงซ้าย-ขวา (เอียงข้าง)         ช่วงประมาณ -90 ถึง 90
+  if(e.beta === null && e.gamma === null) return; // อุปกรณ์บางเครื่องส่งค่า null
+
+  state.beta  = e.beta  || 0;
+  state.gamma = e.gamma || 0;
+  state.gyroActive = true;
+  state.inputMode = 'gyro';
+
+  // แปลงค่า gamma/beta (องศา) ให้กลายเป็นตำแหน่งยานบนจอ
+  // clamp มุมไว้ที่ -45..45 องศา แล้ว map เป็นสัดส่วนของหน้าจอ
+  const gClamped = Math.max(-45, Math.min(45, state.gamma));
+  const bClamped = Math.max(-45, Math.min(45, state.beta - 45)); // ชดเชยมุมถือมือถือปกติ (~45°)
+
+  const targetX = (gClamped + 45) / 90 * canvas.width;
+  const targetY = (bClamped + 45) / 90 * canvas.height;
+
+  // เคลื่อนที่แบบ ease (lerp) ให้ยานลื่นไหล ไม่กระตุก
+  state.shipX += (targetX - state.shipX) * 0.15;
+  state.shipY += (targetY - state.shipY) * 0.15;
+}
+
+async function initGyroscope(){
+  // iOS 13+ ต้องขอ permission แบบ explicit ผ่าน user gesture (การกดปุ่ม)
+  const DOE = window.DeviceOrientationEvent;
+
+  if (DOE && typeof DOE.requestPermission === 'function'){
+    try{
+      const result = await DOE.requestPermission();
+      if (result === 'granted'){
+        window.addEventListener('deviceorientation', handleOrientation, true);
+        armGyroFallbackTimer();
+      } else {
+        enableFallback('permission-denied');
+      }
+    }catch(err){
+      console.warn('Gyro permission error:', err);
+      enableFallback('permission-error');
+    }
+  } else if (DOE) {
+    // Android / เบราว์เซอร์อื่นๆ ที่ไม่ต้องขอ permission แบบ explicit
+    window.addEventListener('deviceorientation', handleOrientation, true);
+    armGyroFallbackTimer();
+  } else {
+    // อุปกรณ์ไม่รองรับ DeviceOrientationEvent เลย (เช่น คอมพิวเตอร์เดสก์ท็อป)
+    enableFallback('unsupported');
+  }
+}
+
+/* ------------------------------------------------------------------------
+   C) FALLBACK MECHANISM
+   ตรวจสอบว่ามี event เอียงเข้ามาจริงหรือไม่ภายในเวลาที่กำหนด
+   (บางเบราว์เซอร์ "รองรับ" API แต่ไม่มีเซนเซอร์จริง เช่น คอมพิวเตอร์)
+   ถ้าไม่มี event เข้ามาเลย ให้ถือว่าไม่มี hardware แล้วสลับไปใช้เมาส์/คีย์บอร์ด
+   ------------------------------------------------------------------------ */
+function armGyroFallbackTimer(){
+  setTimeout(() => {
+    if(!state.gyroActive){
+      enableFallback('no-signal');
+    }
+  }, 1500);
+}
+
+function enableFallback(reason){
+  state.inputMode = 'mouse';
+  document.getElementById('fallbackNotice').style.display = 'block';
+  document.getElementById('dbgGyroMode').textContent = 'fallback (' + reason + ')';
+  document.getElementById('dbgGyroMode').className = 'warn';
+
+  // เริ่มต้นยานไว้กลางจอเมื่อสลับเป็นโหมด fallback
+  state.shipX = canvas.width / 2;
+  state.shipY = canvas.height / 2;
+
+  window.addEventListener('mousemove', (e) => {
+    const rect = canvas.getBoundingClientRect();
+    state.shipX = e.clientX - rect.left;
+    state.shipY = e.clientY - rect.top;
+    state.inputMode = 'mouse';
+  });
+
+  window.addEventListener('keydown', (e) => {
+    if(e.key === 'ArrowLeft')  state.keys.left = true;
+    if(e.key === 'ArrowRight') state.keys.right = true;
+    if(e.key === 'ArrowUp')    state.keys.up = true;
+    if(e.key === 'ArrowDown')  state.keys.down = true;
+  });
+  window.addEventListener('keyup', (e) => {
+    if(e.key === 'ArrowLeft')  state.keys.left = false;
+    if(e.key === 'ArrowRight') state.keys.right = false;
+    if(e.key === 'ArrowUp')    state.keys.up = false;
+    if(e.key === 'ArrowDown')  state.keys.down = false;
+  });
+}
+
+function applyKeyboardMovement(){
+  const speed = 6;
+  if(state.keys.left)  { state.shipX -= speed; state.inputMode = 'keyboard'; }
+  if(state.keys.right) { state.shipX += speed; state.inputMode = 'keyboard'; }
+  if(state.keys.up)    { state.shipY -= speed; state.inputMode = 'keyboard'; }
+  if(state.keys.down)  { state.shipY += speed; state.inputMode = 'keyboard'; }
+}
+
+/* ------------------------------------------------------------------------
+   D) GAME LOOP — requestAnimationFrame
+   นี่คือจุดที่ "ค่าจากฮาร์ดแวร์" (state.shipX/Y ที่ได้จาก gyro/mouse)
+   ถูกนำมาแปลงเป็นภาพบนจอทุกๆ เฟรม (เป้าหมาย 60 FPS)
+   ------------------------------------------------------------------------ */
+function resizeCanvas(){
+  canvas.width  = window.innerWidth;
+  canvas.height = window.innerHeight;
+}
+window.addEventListener('resize', resizeCanvas);
+
+function spawnStar(){
+  const margin = 60;
+  state.star.x = margin + Math.random() * (canvas.width  - margin*2);
+  state.star.y = margin + Math.random() * (canvas.height - margin*2);
+}
+
+function drawShip(x, y){
+  ctx.save();
+  ctx.translate(x, y);
+  ctx.shadowColor = '#9d7bff';
+  ctx.shadowBlur = 18;
+  ctx.fillStyle = '#9d7bff';
+  ctx.beginPath();
+  ctx.moveTo(0, -16);
+  ctx.lineTo(12, 14);
+  ctx.lineTo(0, 8);
+  ctx.lineTo(-12, 14);
+  ctx.closePath();
+  ctx.fill();
+  ctx.restore();
+}
+
+function drawStar(x, y, r){
+  ctx.save();
+  ctx.translate(x, y);
+  ctx.shadowColor = '#5be3d8';
+  ctx.shadowBlur = 20;
+  ctx.fillStyle = '#5be3d8';
+  ctx.beginPath();
+  for(let i=0; i<5; i++){
+    ctx.lineTo(Math.cos((18+i*72)*Math.PI/180)*r, -Math.sin((18+i*72)*Math.PI/180)*r);
+    ctx.lineTo(Math.cos((54+i*72)*Math.PI/180)*r*0.45, -Math.sin((54+i*72)*Math.PI/180)*r*0.45);
+  }
+  ctx.closePath();
+  ctx.fill();
+  ctx.restore();
+}
+
+function checkCollision(){
+  const dx = state.shipX - state.star.x;
+  const dy = state.shipY - state.star.y;
+  const dist = Math.sqrt(dx*dx + dy*dy);
+  if(dist < state.star.r + 16){
+    state.score++;
+    document.getElementById('scoreVal').textContent = state.score;
+    spawnStar();
+  }
+}
+
+function updateDebug(kind, value){
+  if(kind === 'cam'){
+    document.getElementById('dbgCam').textContent = value ? 'active' : 'inactive';
+    document.getElementById('dbgCam').className = value ? 'ok' : 'bad';
+    document.getElementById('dotCam').classList.toggle('on', value);
+  }
+}
+
+function renderDebugPanel(){
+  document.getElementById('dbgGyroMode').textContent = state.inputMode;
+  if(state.inputMode === 'gyro'){
+    document.getElementById('dbgGyroMode').className = 'ok';
+  }
+  document.getElementById('dbgBeta').textContent  = state.beta.toFixed(1)  + '°';
+  document.getElementById('dbgGamma').textContent = state.gamma.toFixed(1) + '°';
+  document.getElementById('dbgPos').textContent   = Math.round(state.shipX) + ', ' + Math.round(state.shipY);
+  document.getElementById('dbgFps').textContent   = Math.round(state.fpsSmooth);
+}
+
+function gameLoop(now){
+  // คำนวณ FPS จริงแบบ smoothed
+  const dt = now - state.lastFrameTime;
+  state.lastFrameTime = now;
+  const instFps = 1000 / dt;
+  state.fpsSmooth += (instFps - state.fpsSmooth) * 0.1;
+
+  applyKeyboardMovement();
+
+  // จำกัดตำแหน่งยานไม่ให้หลุดจอ
+  state.shipX = Math.max(16, Math.min(canvas.width  - 16, state.shipX));
+  state.shipY = Math.max(16, Math.min(canvas.height - 16, state.shipY));
+
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+  drawStar(state.star.x, state.star.y, state.star.r);
+  drawShip(state.shipX, state.shipY);
+  checkCollision();
+  renderDebugPanel();
+
+  requestAnimationFrame(gameLoop);
+}
+
+/* ---------- เริ่มต้นระบบทั้งหมดหลังผู้ใช้กดปุ่ม START ---------- */
+async function bootGame(){
+  resizeCanvas();
+  spawnStar();
+  state.shipX = canvas.width / 2;
+  state.shipY = canvas.height / 2;
+
+  document.getElementById('permOverlay').style.display = 'none';
+
+  await startCamera();
+  await initGyroscope();
+
+  requestAnimationFrame(gameLoop);
+}
+
+document.getElementById('startBtn').addEventListener('click', bootGame);
+document.getElementById('skipBtn').addEventListener('click', () => {
+  document.getElementById('permOverlay').style.display = 'none';
+  resizeCanvas();
+  spawnStar();
+  enableFallback('user-skip');
+  requestAnimationFrame(gameLoop);
+});
+</script>
+
+</body>
+</html>
+<!--
+============================================================================
+สรุปคำอธิบายสำหรับนำเสนออาจารย์ (Presentation Notes)
+============================================================================
+
+1) Security / Permission Layer ของเบราว์เซอร์
+   - เบราว์เซอร์ปฏิบัติต่อกล้องและเซนเซอร์เป็น "ทรัพยากรที่ละเอียดอ่อน" จึงบังคับ
+     ให้ทุกการเข้าถึงต้องผ่าน user gesture (การคลิก/แตะปุ่ม) ก่อนเสมอ — สคริปต์
+     เรียก getUserMedia() หรือ DeviceOrientationEvent.requestPermission()
+     แบบอัตโนมัติตอนโหลดหน้าเว็บไม่ได้ ต้องรอ event จากปุ่ม "เริ่มภารกิจ"
+   - นอกจากนี้ API เหล่านี้ยังทำงานได้เฉพาะบน Secure Context (HTTPS หรือ
+     localhost) เท่านั้น หากรันผ่าน HTTP ธรรมดา เบราว์เซอร์จะปฏิเสธคำขอทันที
+   - iOS Safari (13 ขึ้นไป) เข้มงวดกว่าฝั่ง Android โดยต้องเรียก
+     requestPermission() แยกต่างหากสำหรับ Motion/Orientation แม้ผู้ใช้จะ
+     อนุญาตกล้องไปแล้วก็ตาม
+
+2) Data Stream (กล้อง) เทียบกับ Event Listener (ไจโรสโคป)
+   - กล้อง: getUserMedia() คืนค่าเป็น MediaStream ซึ่งเป็น "ช่องทางข้อมูลต่อเนื่อง"
+     (continuous stream) ที่เราต้องเปิดการเชื่อมต่อไว้ตลอดเวลาที่ต้องการใช้งาน
+     คล้ายเปิดก๊อกน้ำทิ้งไว้ ข้อมูลไหลเข้ามาเรื่อยๆ จนกว่าจะ stop track เอง
+   - ไจโรสโคป: DeviceOrientationEvent ทำงานแบบ "เหตุการณ์แบบแยกส่วน"
+     (discrete event) เบราว์เซอร์จะยิง event มาเป็นครั้งๆ ทุกครั้งที่ค่าเปลี่ยน
+     เราไม่ต้อง "เปิดสตรีม" แค่ addEventListener แล้วรอรับค่าที่ส่งมาเป็นชุดๆ
+   - ความต่างนี้สะท้อนในโค้ด: กล้องต้อง await การเชื่อมต่อและจัดการ track,
+     ส่วนไจโรแค่ผูกฟังก์ชัน callback ไว้เฉยๆ
+
+3) Render Loop: การนำค่าฮาร์ดแวร์ไปอัปเดตกราฟิก
+   - requestAnimationFrame() คือกลไกที่เบราว์เซอร์ใช้ ซิงก์การวาดภาพให้ตรงกับ
+     รอบการ refresh ของจอ (ปกติ ~60 FPS) ต่างจาก setInterval ตรงที่เบราว์เซอร์
+     จะหยุดเรียกอัตโนมัติเมื่อแท็บไม่ได้ active ช่วยประหยัดพลังงาน
+   - ในแต่ละเฟรม โค้ดจะอ่านค่าล่าสุดจาก state (ที่ event listener ของไจโร หรือ
+     mousemove อัปเดตไว้) แล้วแปลงเป็นตำแหน่ง (x, y) บน canvas ก่อนวาดใหม่ทั้งหมด
+   - เทคนิค "lerp" (linear interpolation) ถูกใช้ให้ยานเคลื่อนที่ลื่นไหล
+     แทนที่จะกระโดดไปตำแหน่งใหม่ทันที ซึ่งช่วยลดอาการสั่นของค่าจากเซนเซอร์จริง
+
+4) Fallback Strategy สำหรับการทดสอบข้ามอุปกรณ์
+   - เนื่องจากคอมพิวเตอร์เดสก์ท็อปส่วนใหญ่ไม่มี gyroscope จริง ระบบจึงตั้ง timer
+     ตรวจสอบว่ามี deviceorientation event ส่งค่าเข้ามาจริงหรือไม่ภายใน ~1.5 วินาที
+     หากไม่มีสัญญาณเลย จะถือว่าไม่มีฮาร์ดแวร์ และสลับไปใช้เมาส์/ลูกศรแทนโดยอัตโนมัติ
+     ทำให้ผู้พัฒนาทดสอบ gameplay logic ได้แม้ไม่มีมือถือในมือ
+============================================================================
+-->
