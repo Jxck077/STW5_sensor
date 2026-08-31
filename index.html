@@ -89,6 +89,32 @@
   #scoreBox .l{
     font-size:10px; color:var(--ink-dim); margin-top:2px;
   }
+  #scoreBox .sub{
+    display:flex; gap:10px; margin-top:6px;
+    padding-top:6px; border-top:1px solid var(--line);
+    font-size:10px; color:var(--ink-dim);
+    font-family:'Courier New', monospace;
+  }
+  #scoreBox .sub b{ color:var(--amber); font-weight:700; }
+  #scoreBox .sub .time b{ color:var(--cyan); }
+
+  /* ---------- ปุ่มสลับกล้องหน้า/หลัง ---------- */
+  #camSwitchBtn{
+    position:absolute; top:16px; left:50%; transform:translateX(-50%);
+    z-index:6;
+    background:rgba(13,18,36,0.75);
+    border:1px solid var(--line);
+    color:var(--ink);
+    font-size:12px;
+    padding:8px 14px;
+    border-radius:20px;
+    cursor:pointer;
+    display:flex; align-items:center; gap:6px;
+    backdrop-filter: blur(4px);
+    pointer-events:auto;
+  }
+  #camSwitchBtn:active{ transform: translateX(-50%) scale(0.96); }
+  #camSwitchBtn:disabled{ opacity:0.4; cursor:default; }
 
   /* ---------- Debug / Status Console มุมล่างซ้าย ---------- */
   #debugPanel{
@@ -207,8 +233,14 @@
     <div id="scoreBox">
       <div class="n" id="scoreVal">0</div>
       <div class="l">STARS</div>
+      <div class="sub">
+        <span class="time">⏱ <b id="timerVal">00:00</b></span>
+        <span>🏆 <b id="bestVal">0</b></span>
+      </div>
     </div>
   </div>
+
+  <button id="camSwitchBtn" disabled>🔄 สลับกล้อง</button>
 
   <div id="fallbackNotice">⚠ ไม่พบ Gyroscope — สลับไปใช้เมาส์/ปุ่มลูกศรแทน</div>
 
@@ -259,38 +291,85 @@ const state = {
   star: { x: 0, y: 0, r: 18 },
   keys: { left:false, right:false, up:false, down:false },
   lastFrameTime: performance.now(),
-  fpsSmooth: 0
+  fpsSmooth: 0,
+  facingMode: 'environment',  // กล้องปัจจุบัน: 'environment' (หลัง) หรือ 'user' (หน้า)
+  currentStream: null,        // เก็บ MediaStream ปัจจุบันไว้ เพื่อ stop track ตอนสลับกล้อง
+  startTimeMs: null,          // เวลาที่เริ่มเกม ใช้คำนวณ elapsed time
+  bestScore: 0
 };
+
+const STORAGE_KEY = 'arSpaceCollector.bestScore';
 
 const video   = document.getElementById('camFeed');
 const canvas  = document.getElementById('gameCanvas');
 const ctx     = canvas.getContext('2d');
+const camSwitchBtn = document.getElementById('camSwitchBtn');
+
+/* ------------------------------------------------------------------------
+   BEST SCORE — บันทึกด้วย localStorage เพื่อให้ค่าคงอยู่ข้ามการเปิดเกมใหม่
+   ------------------------------------------------------------------------ */
+function loadBestScore(){
+  const saved = localStorage.getItem(STORAGE_KEY);
+  state.bestScore = saved ? parseInt(saved, 10) || 0 : 0;
+  document.getElementById('bestVal').textContent = state.bestScore;
+}
+function saveBestScoreIfNeeded(){
+  if(state.score > state.bestScore){
+    state.bestScore = state.score;
+    localStorage.setItem(STORAGE_KEY, String(state.bestScore));
+    document.getElementById('bestVal').textContent = state.bestScore;
+  }
+}
 
 /* ------------------------------------------------------------------------
    A) CAMERA INTEGRATION — Data Stream
    getUserMedia คืนค่าเป็น "MediaStream" ซึ่งเป็นข้อมูลที่ไหลเข้ามาต่อเนื่อง
    (สตรีมภาพ) ตราบใดที่ track ยัง active — ต่างจาก event ที่ยิงเป็นครั้งๆ
    ------------------------------------------------------------------------ */
-async function startCamera(){
+async function startCamera(facingMode){
+  facingMode = facingMode || state.facingMode;
+
+  // ถ้ามีสตรีมเก่าค้างอยู่ ต้อง stop track ก่อนเสมอ
+  // ไม่งั้นกล้องจะยังเปิดค้างอยู่เบื้องหลังแม้จะขอสตรีมใหม่แล้ว (memory/battery leak)
+  if(state.currentStream){
+    state.currentStream.getTracks().forEach(track => track.stop());
+    state.currentStream = null;
+  }
+
   try{
-    // ขอสิทธิ์กล้อง โดยพยายามเลือกกล้องหลัง (environment) ก่อน
+    // ขอสิทธิ์กล้องตามฝั่งที่ระบุ: 'environment' = กล้องหลัง, 'user' = กล้องหน้า
     const stream = await navigator.mediaDevices.getUserMedia({
-      video: { facingMode: { ideal: 'environment' } },
+      video: { facingMode: { ideal: facingMode } },
       audio: false
     });
     video.srcObject = stream;  // ผูก MediaStream เข้ากับ <video> โดยตรง
     await video.play();
 
+    state.currentStream = stream;
+    state.facingMode = facingMode;
     state.camActive = true;
     updateDebug('cam', true);
+    camSwitchBtn.disabled = false;
   }catch(err){
-    // กรณีผู้ใช้ปฏิเสธสิทธิ์ หรืออุปกรณ์ไม่มีกล้อง
+    // กรณีผู้ใช้ปฏิเสธสิทธิ์ หรืออุปกรณ์ไม่มีกล้อง (หรือไม่มีกล้องฝั่งที่ขอ)
     console.warn('Camera error:', err);
     state.camActive = false;
     updateDebug('cam', false);
     document.getElementById('dbgCam').textContent = 'denied/unavailable';
   }
 }
+
+/* ------------------------------------------------------------------------
+   สลับกล้องหน้า/หลัง — เรียก getUserMedia ใหม่ด้วย facingMode ตรงข้าม
+   หมายเหตุ: Web API ไม่มีฟังก์ชัน "toggle camera" ในตัว ต้อง stop stream เดิม
+   แล้วขอ stream ใหม่เสมอ นี่คือวิธีมาตรฐานที่ทุกเว็บกล้องใช้
+   ------------------------------------------------------------------------ */
+async function switchCamera(){
+  camSwitchBtn.disabled = true;
+  const nextMode = state.facingMode === 'environment' ? 'user' : 'environment';
+  await startCamera(nextMode);
+}
+camSwitchBtn.addEventListener('click', switchCamera);
 
 /* ------------------------------------------------------------------------
    B) GYROSCOPE INTEGRATION — Event Listener
@@ -457,8 +536,20 @@ function checkCollision(){
   if(dist < state.star.r + 16){
     state.score++;
     document.getElementById('scoreVal').textContent = state.score;
+    saveBestScoreIfNeeded();  // เช็คและบันทึก best score ทันทีที่ทำคะแนนใหม่
     spawnStar();
   }
+}
+
+/* ------------------------------------------------------------------------
+   TIMER — จับเวลาตั้งแต่เริ่มภารกิจ แสดงผลแบบ MM:SS
+   ------------------------------------------------------------------------ */
+function renderTimer(){
+  if(state.startTimeMs === null) return;
+  const elapsedSec = Math.floor((performance.now() - state.startTimeMs) / 1000);
+  const mm = String(Math.floor(elapsedSec / 60)).padStart(2, '0');
+  const ss = String(elapsedSec % 60).padStart(2, '0');
+  document.getElementById('timerVal').textContent = mm + ':' + ss;
 }
 
 function updateDebug(kind, value){
@@ -499,6 +590,7 @@ function gameLoop(now){
   drawShip(state.shipX, state.shipY);
   checkCollision();
   renderDebugPanel();
+  renderTimer();
 
   requestAnimationFrame(gameLoop);
 }
@@ -509,6 +601,8 @@ async function bootGame(){
   spawnStar();
   state.shipX = canvas.width / 2;
   state.shipY = canvas.height / 2;
+  state.startTimeMs = performance.now();
+  loadBestScore();
 
   document.getElementById('permOverlay').style.display = 'none';
 
@@ -519,11 +613,15 @@ async function bootGame(){
 }
 
 document.getElementById('startBtn').addEventListener('click', bootGame);
-document.getElementById('skipBtn').addEventListener('click', () => {
+document.getElementById('skipBtn').addEventListener('click', async () => {
   document.getElementById('permOverlay').style.display = 'none';
   resizeCanvas();
   spawnStar();
+  state.startTimeMs = performance.now();
+  loadBestScore();
   enableFallback('user-skip');
+  // ยังลองเปิดกล้องให้แม้ผู้ใช้ข้าม gyroscope ไป (ปุ่ม skip ในโค้ดเดิมข้ามเฉพาะ gyro)
+  await startCamera();
   requestAnimationFrame(gameLoop);
 });
 </script>
@@ -570,5 +668,14 @@ document.getElementById('skipBtn').addEventListener('click', () => {
      ตรวจสอบว่ามี deviceorientation event ส่งค่าเข้ามาจริงหรือไม่ภายใน ~1.5 วินาที
      หากไม่มีสัญญาณเลย จะถือว่าไม่มีฮาร์ดแวร์ และสลับไปใช้เมาส์/ลูกศรแทนโดยอัตโนมัติ
      ทำให้ผู้พัฒนาทดสอบ gameplay logic ได้แม้ไม่มีมือถือในมือ
+
+5) ฟีเจอร์เพิ่มเติม: สลับกล้อง และการบันทึกคะแนนสูงสุด
+   - สลับกล้อง: Web API ไม่มีคำสั่ง "toggle" กล้องในตัว วิธีมาตรฐานคือ stop
+     track ของ MediaStream เดิมทั้งหมดก่อน (ไม่งั้นกล้องจะค้างเปิดสองตัวพร้อมกัน
+     สิ้นเปลืองแบตเตอรี่) แล้วค่อยเรียก getUserMedia() ใหม่ด้วย
+     facingMode: 'user' (กล้องหน้า) หรือ 'environment' (กล้องหลัง) สลับกัน
+   - Best Score: ใช้ localStorage เก็บคะแนนสูงสุดไว้ในเบราว์เซอร์ของผู้ใช้เอง
+     ค่าจะอยู่ถาวรแม้ปิด-เปิดหน้าเว็บใหม่ (คนละกลไกกับ state ในตัวแปร JS ที่หาย
+     ไปทันทีที่ปิดแท็บ) เทียบได้กับการเขียนไฟล์ลงดิสก์ฝั่ง client
 ============================================================================
 -->
